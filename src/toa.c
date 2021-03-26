@@ -1,4 +1,20 @@
 #include "toa.h"
+#include "kallsyms.h"
+#include "ksyms.h"
+
+
+#if IS_ENABLED(CONFIG_KPROBES)
+#include "kallsyms_kp.c"
+#elif IS_ENABLED(CONFIG_LIVEPATCH)
+#include "kallsyms_lp.c"
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5,7,0)
+int init_kallsyms(void) {
+	return 0;
+}
+#else
+#error "No suitable kallsyms acquisition method!"
+#endif
+
 
 /*
  *	TOA: Address is a new TCP Option
@@ -98,9 +114,15 @@ static void *get_toa_data(struct sk_buff *skb)
  *  try to get local address
  * @return return what the original inet_getname() returns.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+static int
+inet_getname_toa(struct socket *sock, struct sockaddr *uaddr,
+		int peer)
+#else
 static int
 inet_getname_toa(struct socket *sock, struct sockaddr *uaddr,
 		int *uaddr_len, int peer)
+#endif
 {
 	int retval = 0;
 	struct sock *sk = sock->sk;
@@ -111,10 +133,18 @@ inet_getname_toa(struct socket *sock, struct sockaddr *uaddr,
 		sk->sk_user_data);
 
 	/* call orginal one */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+	retval = inet_getname(sock, uaddr, peer);
+#else
 	retval = inet_getname(sock, uaddr, uaddr_len, peer);
+#endif
 
 	/* set our value if need */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+	if (retval > 0 && NULL != sk->sk_user_data && peer) {
+#else
 	if (retval == 0 && NULL != sk->sk_user_data && peer) {
+#endif
 		if (sk_data_ready_addr == (unsigned long) sk->sk_data_ready) {
 			memcpy(&tdata, &sk->sk_user_data, sizeof(tdata));
 			if (TCPOPT_TOA == tdata.opcode &&
@@ -148,9 +178,15 @@ inet_getname_toa(struct socket *sock, struct sockaddr *uaddr,
 }
 
 #ifdef CONFIG_IP_VS_TOA_IPV6
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+static int
+inet6_getname_toa(struct socket *sock, struct sockaddr *uaddr,
+		  int peer)
+#else
 static int
 inet6_getname_toa(struct socket *sock, struct sockaddr *uaddr,
 		  int *uaddr_len, int peer)
+#endif
 {
 	int retval = 0;
 	struct sock *sk = sock->sk;
@@ -161,10 +197,18 @@ inet6_getname_toa(struct socket *sock, struct sockaddr *uaddr,
 		sk->sk_user_data);
 
 	/* call orginal one */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+	retval = inet6_getname(sock, uaddr, peer);
+#else
 	retval = inet6_getname(sock, uaddr, uaddr_len, peer);
+#endif
 
 	/* set our value if need */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+	if (retval > 0 && NULL != sk->sk_user_data && peer) {
+#else
 	if (retval == 0 && NULL != sk->sk_user_data && peer) {
+#endif
 		if (sk_data_ready_addr == (unsigned long) sk->sk_data_ready) {
 			memcpy(&tdata, &sk->sk_user_data, sizeof(tdata));
 			if (TCPOPT_TOA == tdata.opcode &&
@@ -412,11 +456,24 @@ static int toa_stats_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,6,0)
+#  define HAVE_PROC_OPS
+#endif
+
+
 static int toa_stats_seq_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, toa_stats_show, NULL);
 }
 
+#ifdef HAVE_PROC_OPS
+static const struct proc_ops toa_stats_fops = {
+  .proc_open = toa_stats_seq_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+#else
 static const struct file_operations toa_stats_fops = {
 	.owner = THIS_MODULE,
 	.open = toa_stats_seq_open,
@@ -424,15 +481,31 @@ static const struct file_operations toa_stats_fops = {
 	.llseek = seq_lseek,
 	.release = single_release,
 };
+#endif
 
 /*
  * TOA module init and destory
  */
 
+KSYMDEF(kvm_lock);
+KSYMDEF(vm_list);
+
 /* module init */
 static int __init
 toa_init(void)
 {
+
+	int r;
+
+	if ((r = init_kallsyms()))
+		return r;
+
+	KSYMINIT_FAULT(kvm_lock);
+	KSYMINIT_FAULT(vm_list);
+
+	if (r)
+		return r;
+
 	/* alloc statistics array for toa */
 	ext_stats = alloc_percpu(struct toa_stat_mib);
 	if (NULL == ext_stats)

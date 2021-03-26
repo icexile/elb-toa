@@ -5,9 +5,14 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/version.h>
+#include <linux/module.h>
+#include <linux/completion.h>
+#include <linux/list.h>
 #include <linux/err.h>
 #include <linux/time.h>
 #include <linux/skbuff.h>
+#include <linux/types.h>
+#include <linux/printk.h>
 #include <net/tcp.h>
 #include <net/inet_common.h>
 #include <linux/uaccess.h>
